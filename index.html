@@ -73,7 +73,7 @@ label.lbl{display:block;font-weight:700;margin:12px 0 4px}
 input.time{display:block;width:100%;font-size:2.1rem;font-weight:700;text-align:center;min-height:70px;border:3px solid var(--blue);border-radius:14px;background:#fff}
 .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
 .steps button{min-height:56px;border-radius:12px;border:2px solid var(--blue);background:var(--blue2);color:var(--blue);font-weight:700;font-size:.9rem;padding:0 2px}
-input.txt,select.txt{display:block;width:100%;min-height:60px;font-size:1.1rem;padding:8px 12px;border:3px solid #888;border-radius:14px;background:#fff}
+input.txt,select.txt,textarea.txt{resize:none;display:block;width:100%;min-height:60px;font-size:1.1rem;padding:8px 12px;border:3px solid #888;border-radius:14px;background:#fff}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .chips button{min-height:52px;padding:6px 14px;border-radius:26px;border:2px solid var(--blue);background:#fff;color:var(--blue);font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .chips button.on{background:var(--blue);color:#fff}
@@ -300,6 +300,7 @@ function openDay(s){
   if(!V.draft.mark&&!V.draft.entries.length&&isWorkdayNoMark(s))V.draft.entries.push(newEntry());
   V.day=s;V.compPick=false;go('day');
 }
+function splitPlaces(t){return String(t||'').split('/').map(x=>x.trim()).filter(Boolean);}
 function newEntry(){return{start:S.lastTimes.start||'07:00',end:S.lastTimes.end||'15:00',place:''};}
 function renderDay(){
   const s=V.day,dr=V.draft;const d=parseYmd(s);const hol=holidayName(s);
@@ -320,8 +321,9 @@ function renderDay(){
       <label class="lbl">Godzina zakończenia</label><input type="time" class="time" data-f="time" data-i="${i}" data-k="end" value="${e.end}">
       <div class="steps"><button data-act="t" data-i="${i}" data-k="end" data-n="-60">−1 godz.</button><button data-act="t" data-i="${i}" data-k="end" data-n="-15">−15 min</button><button data-act="t" data-i="${i}" data-k="end" data-n="15">+15 min</button><button data-act="t" data-i="${i}" data-k="end" data-n="60">+1 godz.</button></div>
       <div class="dur">Czas pracy: ${fmtH(entryMin(e))} godz.${toMin(e.end)<toMin(e.start)?' (do następnego dnia)':''}</div>
-      <label class="lbl">Miejsce pracy</label><input class="txt" data-f="place" data-i="${i}" value="${esc(e.place)}" placeholder="Wpisz lub wybierz poniżej">
-      ${S.places.length?`<div class="chips">${S.places.map((p,pi)=>`<button class="${p===e.place?'on':''}" data-act="setPlace" data-i="${i}" data-p="${pi}">${esc(p)}</button>`).join('')}</div>`:''}
+      <label class="lbl">Miejsce pracy</label><div class="small">Dotknij kilku miejsc z listy – dodadzą się po kolei. Dotknij ponownie, aby usunąć.</div><textarea class="txt" rows="2" data-f="place" data-i="${i}" placeholder="Wpisz lub wybierz poniżej">${esc(e.place)}</textarea>
+      ${S.places.length?`<div class="chips">${S.places.map((p,pi)=>`<button class="${splitPlaces(e.place).some(x=>x.toLowerCase()===p.toLowerCase())?'on':''}" data-act="setPlace" data-i="${i}" data-p="${pi}">${esc(p)}</button>`).join('')}</div>`:''}
+      ${e.place?`<button class="btn danger" style="min-height:52px" data-act="clearPlace" data-i="${i}">Wyczyść miejsce</button>`:''}
       </div>`;
     });
     if(!dr.entries.length)h+=`<div class="info">Nie pracowałeś tego dnia. Jeśli pracowałeś, naciśnij przycisk poniżej.</div><button class="btn" data-act="addEntry">+ Dodaj godziny pracy</button><button class="btn sec" data-act="likeYesterday">Wpisz tak jak ostatnio</button>`;
@@ -431,7 +433,9 @@ const A={
   t:t=>{const e=V.draft.entries[+t.dataset.i];const k=t.dataset.k;e[k]=fromMin(Math.round((toMin(e[k])+(+t.dataset.n))/15)*15);render();},
   addEntry:()=>{const last=V.draft.entries[V.draft.entries.length-1];V.draft.entries.push(last?{start:last.end,end:fromMin(toMin(last.end)+120),place:''}:newEntry());render();},
   delEntry:async t=>{if(await ask('Usunąć to miejsce?','Wpis zostanie usunięty z tego dnia.','Tak, usuń','Nie',true)){V.draft.entries.splice(+t.dataset.i,1);render();}},
-  setPlace:t=>{V.draft.entries[+t.dataset.i].place=S.places[+t.dataset.p];render();},
+  setPlace:t=>{const e=V.draft.entries[+t.dataset.i];const pl=S.places[+t.dataset.p];const parts=splitPlaces(e.place);
+    const i=parts.findIndex(x=>x.toLowerCase()===pl.toLowerCase());if(i>=0)parts.splice(i,1);else parts.push(pl);e.place=parts.join(' / ');render();},
+  clearPlace:t=>{V.draft.entries[+t.dataset.i].place='';render();},
   likeYesterday:async()=>{let s=V.day;for(let i=0;i<60;i++){s=addDays(s,-1);const d=S.days[s];if(d&&!d.mark&&d.entries&&d.entries.length){V.draft.entries=JSON.parse(JSON.stringify(d.entries));V.draft.mark=null;render();return;}}
     await msg('Brak wcześniejszego wpisu','Nie znalazłem wcześniejszego dnia z godzinami pracy.');},
   saveDay:async()=>{
@@ -441,7 +445,7 @@ const A={
       if(!await ask('Brak dni urlopu','Nie masz już dni urlopu do wykorzystania. Zapisać urlop mimo to?','Tak, zapisz','Nie'))return;}
     if(!dr.mark&&!dr.entries.length)delete S.days[s];
     else{const o={entries:dr.entries,mark:dr.mark||null};if(dr.mark==='wolneZaSwieto'&&dr.forHoliday)o.forHoliday=dr.forHoliday;S.days[s]=o;}
-    for(const e of dr.entries)if(e.place&&!S.places.includes(e.place))S.places.push(e.place);
+    for(const e of dr.entries)for(const pl of splitPlaces(e.place))if(!S.places.some(x=>x.toLowerCase()===pl.toLowerCase()))S.places.push(pl);
     if(dr.entries.length)S.lastTimes={start:dr.entries[0].start,end:dr.entries[dr.entries.length-1].end};
     await save();go('main');scrollTo(s);},
   clearDay:async()=>{if(await ask('Usunąć wpis?','Wszystkie godziny i oznaczenia z tego dnia zostaną usunięte.','Tak, usuń','Nie',true)){delete S.days[V.day];await save();const s=V.day;go('main');scrollTo(s);}},
