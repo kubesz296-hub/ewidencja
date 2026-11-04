@@ -110,6 +110,13 @@ ul.hist{padding-left:22px;margin:6px 0}
 .b-odb{background:#ef6c00}
 .prevwrap{overflow:auto;border:2px solid #999;border-radius:8px;background:#fff}
 .prevwrap img{display:block}
+.paycard{display:block;width:calc(100% - 16px);margin:8px;padding:10px 12px;text-align:left;border-radius:14px;border:3px solid #b8860b;background:#fff8e1;font-size:1rem;cursor:pointer}
+.paycard b{font-size:1.1rem}
+.tog{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;margin:6px 0;padding:8px 12px;border-radius:14px;border:2px solid #999;background:#fff;text-align:left;font-weight:700}
+.tog .box{flex:none;width:30px;height:30px;border-radius:8px;border:3px solid var(--blue);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.1rem}
+.tog.on .box{background:var(--blue)}
+.utypes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.utypes .mark{min-height:52px;font-size:.95rem}
 </style>
 </head>
 <body>
@@ -172,8 +179,8 @@ function fmtSigned(min){if(!min)return '0:00';return (min>0?'+':'−')+fmtH(min)
 let S=null;
 function defaultState(){const y=new Date().getFullYear();return{v:1,setupDone:false,name:'',places:[],days:{},
   vac:{base:0,baseDate:todayStr(),annual:26,lastYear:y,additions:[],history:[]},
-  reminder:'15:30',std:{start:'07:00',end:'15:00'},sent:{},lastBackup:null,backupSnooze:null,lastTimes:{start:'07:00',end:'15:00'}};}
-function migrate(st){const d=defaultState();const o=Object.assign(d,st||{});o.vac=Object.assign(defaultState().vac,o.vac||{});o.days=o.days||{};o.places=o.places||[];o.sent=o.sent||{};o.lastTimes=o.lastTimes||{start:'07:00',end:'15:00'};o.std=o.std||{start:o.lastTimes.start||'07:00',end:o.lastTimes.end||'15:00'};return o;}
+  reminder:'15:30',std:{start:'07:00',end:'15:00'},pinned:[],city:'',pay:{amount:0,kind:'netto',pit2:true,kup300:false,ppk:false,u26:false},sent:{},lastBackup:null,backupSnooze:null,lastTimes:{start:'07:00',end:'15:00'}};}
+function migrate(st){const d=defaultState();const o=Object.assign(d,st||{});o.vac=Object.assign(defaultState().vac,o.vac||{});o.days=o.days||{};o.places=o.places||[];o.sent=o.sent||{};o.lastTimes=o.lastTimes||{start:'07:00',end:'15:00'};o.std=o.std||{start:o.lastTimes.start||'07:00',end:o.lastTimes.end||'15:00'};o.pinned=o.pinned||[];o.city=o.city||'';o.pay=Object.assign({amount:0,kind:'netto',pit2:true,kup300:false,ppk:false,u26:false},o.pay||{});return o;}
 
 /* ====== Zapis w telefonie (IndexedDB + kopia w localStorage) ====== */
 const DB={db:null,
@@ -216,7 +223,13 @@ function monthCalc(y,m){
   }
   return r;
 }
-function isVacDay(s){const d=S.days[s];return !!(d&&d.mark==='urlop'&&isWorkdayNoMark(s));}
+const UT={wyp:'wypoczynkowy',nz:'na żądanie',ok:'okolicznościowy',bez:'bezpłatny'};
+const UT_BADGE={wyp:'Urlop',nz:'Urlop na żądanie',ok:'Urlop okolicznościowy',bez:'Urlop bezpłatny'};
+const UT_PDF={wyp:'Urlop',nz:'Urlop na żąd.',ok:'Urlop okol.',bez:'Urlop bezpł.'};
+function poolType(ut){return !ut||ut==='wyp'||ut==='nz';}
+function markLabel(d,short){if(d.mark==='urlop')return (short?UT_PDF:UT_BADGE)[d.utype||'wyp'];return MARKS[d.mark];}
+function isVacDay(s){const d=S.days[s];return !!(d&&d.mark==='urlop'&&poolType(d.utype)&&isWorkdayNoMark(s));}
+function nzUsed(y){return Object.keys(S.days).filter(s=>s.startsWith(y+'-')&&S.days[s].mark==='urlop'&&S.days[s].utype==='nz'&&isWorkdayNoMark(s)).length;}
 function vacBalance(at){
   at=at||'9999-12-31';const v=S.vac;let b=v.base;
   for(const a of v.additions)if(a.year+'-01-01'<=at)b+=a.days;
@@ -238,6 +251,7 @@ const V={screen:'main',y:now0.getFullYear(),m:now0.getMonth(),day:null,draft:nul
 let installPrompt=null;
 
 function render(){
+  PLC=null;
   const app=$('#app');
   if(!S.setupDone){app.innerHTML=renderSetup();return;}
   if(V.screen==='day')app.innerHTML=renderDay();
@@ -245,6 +259,7 @@ function render(){
   else if(V.screen==='help')app.innerHTML=renderHelp();
   else if(V.screen==='range')app.innerHTML=renderRange();
   else if(V.screen==='preview')app.innerHTML=renderPreview();
+  else if(V.screen==='wniosek')app.innerHTML=renderWniosek();
   else app.innerHTML=renderMain();
 }
 function go(screen){V.screen=screen;render();window.scrollTo(0,0);}
@@ -275,6 +290,8 @@ function renderMain(){
   let h=`<header class="top"><div class="monthnav"><button data-act="month" data-n="-1" aria-label="Poprzedni miesiąc">◀</button><div class="mtitle">${cap(MONTHS[m])} ${y}</div><button data-act="month" data-n="1" aria-label="Następny miesiąc">▶</button></div>
   <div class="summary"><div>Godziny<b>${fmtH(mc.worked)}</b></div><div class="${mc.net<0?'neg':''}">Nadgodziny<b>${fmtSigned(mc.net)}</b></div><div class="${bal<0?'neg':''}">Urlop zostało<b>${dni(bal)}</b></div></div>
   ${isCur?'':'<button class="todaybtn" data-act="toToday">Wróć do bieżącego miesiąca</button>'}</header><main><div id="banners">${renderBanners()}</div>`;
+  const pc=payCalc(y,m);
+  if(pc)h+=`<button class="paycard" data-act="payInfo">Nadgodziny w tym miesiącu: <b>ok. ${zl(pc.otNet)} na rękę</b>${pc.missing?`<br><span class="neg">Brakuje ${fmtH(pc.missing)} godz. do normy</span>`:''}<br><span class="small">Tylko dla Ciebie – dotknij, aby zobaczyć szczegóły</span></button>`;
   h+=`<div style="padding:0 8px"><button class="btn sec" data-act="openRange">Urlop / L4 na kilka dni</button></div>`;
   if(mc.missing)h+=`<div class="banner red"><p>Brakuje wpisów w ${dni(mc.missing)} roboczych tego miesiąca (zaznaczone czerwonym paskiem).</p></div>`;
   for(let d=1;d<=daysInMonth(y,m);d++){
@@ -283,7 +300,7 @@ function renderMain(){
     let cls='day';if(c.hol||c.mark==='swieto')cls+=' hol';else if(c.we)cls+=' we';if(s===t)cls+=' today';if(c.missing)cls+=' miss';
     let mid='';
     if(c.hol)mid+=`<div class="hname">${esc(c.hol)}</div>`;
-    if(c.mark)mid+=`<span class="badge b-${c.mark}">${MARKS[c.mark]}</span>`;
+    if(c.mark)mid+=`<span class="badge b-${c.mark}">${markLabel(dd)}</span>`;
     if(c.mark==='wolneZaSwieto'&&dd.forHoliday)mid+=` <span class="muted">za ${fmtDate(dd.forHoliday)}</span>`;
     if(c.odb)mid+=`<span class="badge b-odb">Odbiór nadgodzin ${fmtH(c.odb)}</span>`;
     for(const e of c.entries)mid+=`<div>${e.start}–${e.end} <span class="pl">${esc(e.place)||'—'}</span></div>`;
@@ -320,16 +337,32 @@ function weekHeader(y,m,d){
 }
 function togglePlace(cur,pl){const parts=splitPlaces(cur);const i=parts.findIndex(x=>x.toLowerCase()===pl.toLowerCase());if(i>=0)parts.splice(i,1);else parts.push(pl);return parts.join(' / ');}
 function hasPlace(cur,pl){return splitPlaces(cur).some(x=>x.toLowerCase()===pl.toLowerCase());}
-function addPlaces(str){for(const pl of splitPlaces(str))if(!S.places.some(x=>x.toLowerCase()===pl.toLowerCase()))S.places.push(pl);}
+function addPlaces(){}
+let PLC=null;
+function PL(){return PLC||(PLC=visiblePlaces());}
+function placeUsage(){const u={};
+  for(const s in S.days){const d=S.days[s];if(d.mark||!d.entries)continue;
+    for(const e of d.entries)for(const pl of splitPlaces(e.place)){const k=pl.toLowerCase();const o=u[k]||(u[k]={name:pl,dates:[],last:''});
+      if(!o.dates.includes(s))o.dates.push(s);if(s>=o.last){o.last=s;o.name=pl;}}}
+  return u;}
+function autoPlaces(){const u=placeUsage();const lim=addDays(todayStr(),-30);const out=[];
+  for(const k in u){const o=u[k];if(o.last<lim||o.dates.length<2)continue;const ds=o.dates.sort();
+    let ok=false;for(let i=1;i<ds.length;i++)if(daysBetween(ds[i-1],ds[i])<=30){ok=true;break;}
+    if(ok)out.push({name:o.name,last:o.last});}
+  return out;}
+function plSort(a){return a.sort((x,y)=>x.localeCompare(y,'pl',{sensitivity:'base'}));}
+function visiblePlaces(){const seen=new Set();const out=[];
+  for(const p of [...S.pinned,...autoPlaces().map(o=>o.name)]){const k=p.toLowerCase();if(!seen.has(k)){seen.add(k);out.push(p);}}
+  return plSort(out);}
 function placesDialog(sub){
-  return new Promise(res=>{let cur='';const root=$('#modal-root');
+  return new Promise(res=>{let cur='';const root=$('#modal-root');PLC=null;
     const draw=()=>{root.innerHTML=`<div class="modal-bg"><div class="modal"><h2>Gdzie pracowałeś?</h2><p class="small">${esc(sub)}</p>
       <textarea id="pdTxt" class="txt" rows="2" placeholder="Wpisz lub dotknij miejsc poniżej">${esc(cur)}</textarea>
-      ${S.places.length?`<div class="chips">${S.places.map((p,i)=>`<button class="${hasPlace(cur,p)?'on':''}" data-pd="${i}">${esc(p)}</button>`).join('')}</div>`:''}
+      ${PL().length?`<div class="chips">${PL().map((p,i)=>`<button class="${hasPlace(cur,p)?'on':''}" data-pd="${i}">${esc(p)}</button>`).join('')}</div>`:''}
       <button class="btn green" data-pdok="1">Zapisz</button><button class="btn sec" data-pdok="2">Zapisz bez miejsca</button><button class="btn sec" data-pdok="0">Anuluj</button></div></div>`;
       $('#pdTxt').oninput=e=>{cur=e.target.value;};};
     draw();
-    root.onclick=e=>{const c=e.target.closest('[data-pd]');if(c){cur=togglePlace(cur,S.places[+c.dataset.pd]);draw();return;}
+    root.onclick=e=>{const c=e.target.closest('[data-pd]');if(c){cur=togglePlace(cur,PL()[+c.dataset.pd]);draw();return;}
       const o=e.target.closest('[data-pdok]');if(!o)return;const v=o.dataset.pdok;root.innerHTML='';root.onclick=null;res(v==='1'?cur.trim():v==='2'?'':null);};});
 }
 function timePicker(cur,title){
@@ -350,17 +383,70 @@ function renderRange(){
   const r=V.range;const list=rangeDays(r);const conf=list.filter(s=>S.days[s]&&S.days[s].mark!==r.type);
   let h=`<header class="top simple"><button class="back" data-act="go" data-s="main">◀ Wróć</button><div class="ttl">Kilka dni naraz</div></header><main class="pad">
   <h2>Co zaznaczyć?</h2><div class="marks">${[['urlop','Urlop'],['l4','L4'],['wolny','Dzień wolny']].map(([k,l])=>`<button class="mark ${r.type===k?'on':''}" data-act="rgType" data-k="${k}">${l}</button>`).join('')}</div>
+  ${r.type==='urlop'?`<label class="lbl">Rodzaj urlopu</label><div class="utypes">${Object.keys(UT).map(k=>`<button class="mark ${(r.utype||'wyp')===k?'on':''}" data-act="rgUtype" data-k="${k}">${cap(UT[k])}</button>`).join('')}</div>`:''}
   <label class="lbl">Od dnia</label><input type="date" class="txt" data-f="rgFrom" value="${r.from}">
   <label class="lbl">Do dnia (włącznie)</label><input type="date" class="txt" data-f="rgTo" value="${r.to}">`;
   if(r.to<r.from)h+=`<div class="info red">Data „do” jest wcześniejsza niż „od”.</div>`;
   else{
     h+=`<div class="info">${r.type==='l4'?'Zostanie zaznaczonych '+dni(list.length)+' (wszystkie dni kalendarzowe).':'Zostanie zaznaczonych '+dni(list.length)+' roboczych (pon.–pt., bez świąt).'}</div>`;
-    if(r.type==='urlop'){const n=list.filter(s=>s>=S.vac.baseDate&&!isVacDay(s)).length;const b=vacBalance()-n;h+=`<div class="info ${b<0?'red':''}">Po zapisaniu zostanie Ci ${dni(b)} urlopu.</div>`;}
+    if(r.type==='urlop'&&poolType(r.utype)){const n=list.filter(s=>s>=S.vac.baseDate&&!isVacDay(s)).length;const b=vacBalance()-n;h+=`<div class="info ${b<0?'red':''}">Po zapisaniu zostanie Ci ${dni(b)} urlopu.</div>`;}
+    else if(r.type==='urlop')h+=`<div class="info">Ten rodzaj urlopu nie zmniejsza puli dni urlopowych.</div>`;
     if(conf.length)h+=`<div class="info yel">${dni(conf.length)} ma już inne wpisy. Przy zapisie zapytam, co z nimi zrobić.</div>`;
   }
   h+=`<button class="btn green" data-act="rgSave">Zapisz</button><button class="btn sec" data-act="go" data-s="main">Anuluj</button></main>`;
   return h;
 }
+/* --- Wniosek o urlop --- */
+function urlopBlock(s){const ut=(S.days[s]||{}).utype||'wyp';const same=x=>{const d=S.days[x];return d&&d.mark==='urlop'&&(d.utype||'wyp')===ut;};
+  const walk=(dir)=>{let edge=s,cur=s;for(let i=0;i<60;i++){cur=addDays(cur,dir);if(same(cur))edge=cur;else if(!isWorkdayNoMark(cur)&&!S.days[cur])continue;else break;}return edge;};
+  return [walk(-1),walk(1)];}
+async function offerWniosek(from,to,ut,extra){
+  const txt=(extra?extra+'<br><br>':'')+`Wystawić wniosek o urlop ${UT[ut]} od ${fmtDate(from)} do ${fmtDate(to)} i wysłać go do kadr?`;
+  if(await ask('Wniosek o urlop',txt,'Tak, wystaw wniosek','Nie teraz')){V.wn={from,to,ut,year:+from.slice(0,4),date:todayStr()};go('wniosek');}}
+function renderWniosek(){
+  const w=V.wn;const n=rangeDays({type:'urlop',from:w.from,to:w.to}).length;
+  return `<header class="top simple"><button class="back" data-act="go" data-s="main">◀ Wróć</button><div class="ttl">Wniosek o urlop</div></header><main class="pad">
+  <label class="lbl">Rodzaj urlopu</label><div class="utypes">${Object.keys(UT).map(k=>`<button class="mark ${w.ut===k?'on':''}" data-act="wnUt" data-k="${k}">${cap(UT[k])}</button>`).join('')}</div>
+  <div class="row2"><div><label class="lbl">Od</label><input type="date" class="txt" data-f="wnFrom" value="${w.from}"></div><div><label class="lbl">Do</label><input type="date" class="txt" data-f="wnTo" value="${w.to}"></div></div>
+  ${w.to<w.from?'<div class="info red">Data „do” jest wcześniejsza niż „od”.</div>':`<div class="info">${dni(n)} roboczych</div>`}
+  <label class="lbl">Za rok</label><div class="stepper"><button data-act="wnYear" data-n="-1">−</button><div class="val">${w.year}</div><button data-act="wnYear" data-n="1">+</button></div>
+  <label class="lbl">Miejscowość</label><input class="txt" data-f="wnCity" value="${esc(S.city)}" placeholder="np. Szczecin">
+  <label class="lbl">Data wystawienia</label><input type="date" class="txt" data-f="wnDate" value="${w.date}">
+  <h2>Podgląd</h2><div class="prevwrap"><img src="${drawWniosek(w).toDataURL('image/jpeg',0.85)}" alt="Podgląd wniosku" style="width:100%"></div>
+  </main>
+  <footer class="bar"><button class="btn green" data-act="wnSend">Wyślij wniosek</button><button class="btn sec" data-act="go" data-s="main">Wróć</button></footer>`;}
+function drawWniosek(w){
+  const W=1654,H=2339,k=W/210;const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+  const X=v=>v*k;const FF='Arial, Roboto, "Liberation Sans", Helvetica, sans-serif';
+  const setF=(pt,b)=>{g.font=(b?'bold ':'')+(pt*0.3528*k).toFixed(1)+'px '+FF;};
+  g.fillStyle='#fff';g.fillRect(0,0,W,H);g.fillStyle='#000';g.textBaseline='alphabetic';
+  const dots=(x1,x2,y)=>{g.save();g.setLineDash([X(0.5),X(0.9)]);g.lineWidth=X(0.3);g.beginPath();g.moveTo(X(x1),X(y));g.lineTo(X(x2),X(y));g.stroke();g.restore();};
+  const ctext=(t,cx,y,pt,b,maxW)=>{setF(pt,b);let p=pt;while(maxW&&g.measureText(t).width>X(maxW)&&p>6){p-=0.25;setF(p,b);}g.textAlign='center';g.fillText(t,X(cx),X(y));};
+  // nagłówek
+  dots(20,90,32);ctext(S.name,55,30.5,12,true,68);ctext('(imię i nazwisko)',55,36.5,8.5);
+  dots(20,90,52);ctext('(nazwa działu)',55,56.5,8.5);
+  const d=parseYmd(w.date);const dt=(S.city?S.city+', ':'')+'dnia '+d.getDate()+' '+MONTHS_GEN[d.getMonth()]+' '+d.getFullYear()+' r.';
+  dots(115,190,32);ctext(dt,152.5,30.5,12,true,74);ctext('(miejscowość i data)',152.5,36.5,8.5);
+  ctext('Wniosek o urlop',105,82,17,true);
+  // treść z przekreśleniami
+  const toks=[['Niniejszym składam wniosek o udzielenie w dniach od '],[fmtDate(w.from)+' r.',0,1],[' do '],[fmtDate(w.to)+' r.',0,1],[' przysługującego za rok '],[String(w.year),0,1],[' urlopu ']];
+  const opts=[['wyp','wypoczynkowego'],['nz','wypoczynkowego na żądanie'],['ok','okolicznościowego'],['bez','bezpłatnego']];
+  opts.forEach(([kk,l],i)=>{toks.push([l,kk!==w.ut,kk===w.ut]);toks.push([i<opts.length-1?' / ':' *).']);});
+  const pt=12.5;let x=32,y=100;const L=20,Rr=190,lh=9;
+  for(const [t,strike,bold] of toks){const words=t.split(/(?<= )/);
+    for(const wd of words){setF(pt,!!bold);const ww=g.measureText(wd).width/k;
+      if(x+ww>Rr&&wd.trim()){x=L;y+=lh;}
+      if(x===L&&!wd.trim())continue;
+      g.textAlign='left';g.fillText(wd,X(x),X(y));
+      if(strike&&wd.trim()){const tw=g.measureText(wd.trimEnd()).width/k;g.save();g.lineWidth=X(0.35);g.beginPath();g.moveTo(X(x),X(y-1.4));g.lineTo(X(x+tw),X(y-1.4));g.stroke();g.restore();}
+      x+=ww;}}
+  y+=lh;setF(pt,false);g.textAlign='left';const n=rangeDays({type:'urlop',from:w.from,to:w.to}).length;
+  g.fillText('Liczba dni roboczych: '+n+'.',X(L),X(y));
+  const sy=y+34;
+  dots(20,90,sy);ctext('(podpis kierownika)',55,sy+4.5,8.5);
+  dots(120,190,sy);ctext('(podpis pracownika)',155,sy+4.5,8.5);
+  setF(8.5,false);g.textAlign='left';g.fillText('*) niepotrzebne skreślić',X(20),X(sy+16));
+  return c;}
 /* --- Podgląd PDF --- */
 function renderPreview(){
   const p=V.preview;
@@ -370,6 +456,24 @@ function renderPreview(){
   <button class="btn sec" data-act="zoom">${p.zoom?'Pomniejsz':'Powiększ'}</button></main>
   <footer class="bar"><button class="btn green" data-act="doSend">Wyślij PDF</button><button class="btn sec" data-act="go" data-s="main">Wróć</button></footer>`;
 }
+/* --- Wynagrodzenie (tylko informacyjnie) --- */
+const r2=v=>Math.round(v*100)/100;
+function netFromGross(G,p){p=p||S.pay;const zus=r2(G*0.1371);const base=G-zus;const health=r2(base*0.09);
+  const ppkEmp=p.ppk?r2(G*0.015):0,ppkEe=p.ppk?r2(G*0.02):0;let pit=0;
+  if(!p.u26){const tb=Math.max(0,Math.round(base-(p.kup300?300:250)+ppkEmp));pit=Math.max(0,Math.round(tb*0.12-(p.pit2?300:0)));}
+  return r2(G-zus-health-pit-ppkEe);}
+function grossFromNet(N){let lo=0,hi=N*3+1000;for(let i=0;i<80;i++){const mid=(lo+hi)/2;if(netFromGross(mid)<N)lo=mid;else hi=mid;}return r2(hi);}
+function zl(v){return v.toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})+' zł';}
+function payCalc(y,m){
+  const P=S.pay;if(!P.amount)return null;const G=P.kind==='brutto'?P.amount:grossFromNet(P.amount);
+  let wd=0,sh=0,p50=0,p100=0,red=0;
+  for(let d=1;d<=daysInMonth(y,m);d++){const s=y+'-'+pad(m+1)+'-'+pad(d);const w=wday(s);const c=dayCalc(s);
+    if(isWorkdayNoMark(s))wd++;if(w===6&&holidayName(s))sh++;
+    if(c.hol||w===0||c.mark==='swieto')p100+=c.over;else p50+=c.over;red+=c.deficit+c.odb;}
+  const normH=Math.max(1,(wd-sh)*8);const rate=G/normH;const netBase=netFromGross(G);
+  const g50=p50,g100=p100;let x=Math.min(red,p50);p50-=x;red-=x;x=Math.min(red,p100);p100-=x;red-=x;
+  const otG=r2(rate*1.5*p50/60+rate*2*p100/60);const otNet=r2(netFromGross(G+otG)-netBase);
+  return{G,netBase,normH,rate,rateNet:netBase/normH,g50,g100,p50,p100,missing:red,otG,otNet};}
 function refreshBanners(){const b=$('#banners');if(b&&V.screen==='main'&&S.setupDone)b.innerHTML=renderBanners();}
 
 /* --- Edycja dnia --- */
@@ -402,7 +506,7 @@ function renderDay(){
       <div class="steps"><button data-act="t" data-i="${i}" data-k="end" data-n="-60">−1 godz.</button><button data-act="t" data-i="${i}" data-k="end" data-n="-15">−15 min</button><button data-act="t" data-i="${i}" data-k="end" data-n="15">+15 min</button><button data-act="t" data-i="${i}" data-k="end" data-n="60">+1 godz.</button></div>
       <div class="dur">Czas pracy: ${fmtH(entryMin(e))} godz.${toMin(e.end)<toMin(e.start)?' (do następnego dnia)':''}</div>
       <label class="lbl">Miejsce pracy</label><div class="small">Dotknij kilku miejsc z listy – dodadzą się po kolei. Dotknij ponownie, aby usunąć.</div><textarea class="txt" rows="2" data-f="place" data-i="${i}" placeholder="Wpisz lub wybierz poniżej">${esc(e.place)}</textarea>
-      ${S.places.length?`<div class="chips">${S.places.map((p,pi)=>`<button class="${splitPlaces(e.place).some(x=>x.toLowerCase()===p.toLowerCase())?'on':''}" data-act="setPlace" data-i="${i}" data-p="${pi}">${esc(p)}</button>`).join('')}</div>`:''}
+      ${PL().length?`<div class="chips">${PL().map((p,pi)=>`<button class="${splitPlaces(e.place).some(x=>x.toLowerCase()===p.toLowerCase())?'on':''}" data-act="setPlace" data-i="${i}" data-p="${pi}">${esc(p)}</button>`).join('')}</div>`:''}
       ${e.place?`<button class="btn danger" style="min-height:52px" data-act="clearPlace" data-i="${i}">Wyczyść miejsce</button>`:''}
       </div>`;
     });
@@ -416,10 +520,13 @@ function renderDay(){
       ${fill>0&&fill!==odb?`<button class="btn" data-act="odbSet" data-n="${fill}">${w?'Uzupełnij do 8 godz. ('+fmtH(fill)+')':'Cały dzień (8:00)'}</button>`:''}
       ${odb?`<button class="btn danger" style="min-height:52px" data-act="odbSet" data-n="0">Bez odbioru</button>`:''}</div>`;}
   }else if(dr.mark==='urlop'){
-    const old=S.days[s]||{};
-    if(!isWorkdayNoMark(s))h+=`<div class="info">Urlop w weekend lub święto nie zmniejsza puli dni urlopowych.</div>`;
+    const old=S.days[s]||{};const ut=dr.utype||'wyp';
+    h+=`<label class="lbl">Rodzaj urlopu</label><div class="utypes">${Object.keys(UT).map(k=>`<button class="mark ${ut===k?'on':''}" data-act="setUtype" data-k="${k}">${cap(UT[k])}</button>`).join('')}</div>`;
+    if(ut==='nz'){const n=nzUsed(d.getFullYear())+((old.mark==='urlop'&&old.utype==='nz')?0:(isWorkdayNoMark(s)?1:0));h+=`<div class="info ${n>4?'red':''}">Urlop na żądanie w ${d.getFullYear()} r.: ${n} z 4 dni (liczy się do puli urlopu wypoczynkowego).</div>`;}
+    if(!poolType(ut))h+=`<div class="info">Ten rodzaj urlopu nie zmniejsza puli dni urlopowych.</div>`;
+    else if(!isWorkdayNoMark(s))h+=`<div class="info">Urlop w weekend lub święto nie zmniejsza puli dni urlopowych.</div>`;
     else if(s<S.vac.baseDate)h+=`<div class="info">Ten dzień jest sprzed ustawienia stanu urlopu, więc nie zmienia puli.</div>`;
-    else{const b=vacBalance()-(old.mark==='urlop'?0:1);h+=`<div class="info ${b<0?'red':''}">Po zapisaniu zostanie Ci ${dni(b)} urlopu.</div>`;}
+    else{const b=vacBalance()-(isVacDay(s)?0:1);h+=`<div class="info ${b<0?'red':''}">Po zapisaniu zostanie Ci ${dni(b)} urlopu.</div>`;}
   }else if(dr.mark==='wolneZaSwieto'){
     const yy=d.getFullYear();const list=[...satHolidays(yy-1),...satHolidays(yy)];
     h+=`<label class="lbl">Za które święto (w sobotę)?</label><select class="txt" data-f="forHoliday"><option value="">— nie wybrano —</option>${list.map(x=>{const cp=compFor(x);return `<option value="${x}" ${dr.forHoliday===x?'selected':''}>${fmtDate(x)} ${esc(holidayName(x))}${cp&&cp!==s?' (już oddane)':''}</option>`;}).join('')}</select>`;
@@ -441,6 +548,21 @@ function satHolidayBox(s){
 }
 
 /* --- Ustawienia --- */
+function renderPaySettings(){
+  const P=S.pay;const n=new Date();const pc=payCalc(n.getFullYear(),n.getMonth());
+  const tog=(k,l)=>`<button class="tog ${P[k]?'on':''}" data-act="payTog" data-k="${k}"><span class="box">${P[k]?'✓':''}</span><span>${l}</span></button>`;
+  return `<div class="card"><h2 style="margin-top:0">Wynagrodzenie</h2>
+   <div class="small">Tylko dla Ciebie – nie ma go na wydruku. Wyliczenia są orientacyjne.</div>
+   <div class="row2" style="margin-top:8px"><button class="mark ${P.kind==='netto'?'on':''}" data-act="payKind" data-k="netto">Na rękę</button><button class="mark ${P.kind==='brutto'?'on':''}" data-act="payKind" data-k="brutto">Brutto</button></div>
+   <label class="lbl">Miesięczna pensja ${P.kind==='netto'?'na rękę':'brutto'} (zł)</label>
+   <input class="txt" type="number" inputmode="decimal" min="0" step="0.01" data-f="payAmount" value="${P.amount||''}" placeholder="np. 5000">
+   ${tog('pit2','Złożony PIT-2 (kwota zmniejszająca podatek)')}
+   ${tog('kup300','Dojeżdżam do pracy z innej miejscowości')}
+   ${tog('ppk','Mam PPK')}
+   ${tog('u26','Mam mniej niż 26 lat (bez podatku)')}
+   ${pc?`<div class="info">${P.kind==='netto'?'Brutto: ok. '+zl(pc.G)+'<br>':'Na rękę: ok. '+zl(pc.netBase)+'<br>'}Stawka w tym miesiącu (${pc.normH} godz.): ${zl(pc.rate)} brutto, ok. ${zl(pc.rateNet)} na rękę za godzinę</div>
+   ${P.kind==='netto'?'<div class="small">Jeśli brutto nie zgadza się z paskiem, przełącz na „Brutto” i wpisz kwotę z paska.</div>':''}`:''}
+  </div>`;}
 function renderSettings(){
   const bal=vacBalance();if(V.vacEdit===null)V.vacEdit=bal;const yy=new Date().getFullYear();
   const used=Object.keys(S.days).filter(s=>s.startsWith(yy+'-')&&isVacDay(s)).sort();
@@ -455,13 +577,21 @@ function renderSettings(){
    <label class="lbl">Urlop w roku (dodawany 1 stycznia)</label>
    <div class="stepper"><button data-act="annual" data-n="-1">−</button><div class="val">${dni(S.vac.annual)}</div><button data-act="annual" data-n="1">+</button></div>
    <div class="row2"><button class="btn sec" data-act="annualSet" data-n="20">20 dni</button><button class="btn sec" data-act="annualSet" data-n="26">26 dni</button></div>
+   <button class="btn" data-act="wnNew">Wystaw wniosek o urlop</button>
    <label class="lbl">Wykorzystany urlop w ${yy} r.: ${dni(used.length)}</label>
    ${used.length?`<ul class="hist">${used.map(s=>`<li>${fmtDateLong(s)}</li>`).join('')}</ul>`:''}
    ${S.vac.history.length?`<label class="lbl">Historia</label><ul class="hist">${S.vac.history.slice().reverse().map(x=>`<li>${fmtDate(x.date)} – ${esc(x.text)}</li>`).join('')}</ul>`:''}
   </div>
   <div class="card"><h2 style="margin-top:0">Miejsca pracy</h2>
-   ${S.places.length?S.places.map((p,i)=>`<div class="plrow"><span>${esc(p)}</span><button data-act="plRename" data-i="${i}">Zmień</button><button class="del" data-act="plDel" data-i="${i}">Usuń</button></div>`).join(''):'<div class="muted">Miejsca zapiszą się same, gdy wpiszesz je przy godzinach.</div>'}
-   <button class="btn sec" data-act="plAdd">+ Dodaj miejsce</button></div>
+   <div class="small">Miejsce samo trafia na listę, gdy wpiszesz je 2 razy w ciągu 30 dni, i samo znika po 30 dniach bez użycia. Przypięte miejsca (★) zostają zawsze.</div>
+   <label class="lbl">★ Przypięte</label>
+   ${S.pinned.length?plSort(S.pinned.slice()).map(p=>`<div class="plrow"><span>★ ${esc(p)}</span><button class="del" data-act="plUnpin" data-p="${esc(p)}">Odepnij</button></div>`).join(''):'<div class="muted">Brak przypiętych miejsc.</div>'}
+   <button class="btn sec" data-act="plAdd">+ Dodaj stałe miejsce</button>
+   <label class="lbl">Ostatnio używane</label>
+   ${(()=>{const a=autoPlaces().filter(o=>!S.pinned.some(p=>p.toLowerCase()===o.name.toLowerCase())).sort((x,y)=>x.name.localeCompare(y.name,'pl',{sensitivity:'base'}));
+     return a.length?a.map(o=>`<div class="plrow"><span>${esc(o.name)}<br><span class="small">zniknie ${fmtDate(addDays(o.last,31))}</span></span><button data-act="plPin" data-p="${esc(o.name)}">★ Przypnij</button></div>`).join(''):'<div class="muted">Na razie brak.</div>';})()}
+  </div>
+  ${renderPaySettings()}
   <div class="card"><h2 style="margin-top:0">Twoje zwykłe godziny pracy</h2>
    <div class="small">Używane przy szybkim wpisie i wypełnianiu całego tygodnia.</div>
    <label class="lbl">Początek</label><button class="timebtn" data-act="pickStd" data-k="start">${S.std.start}</button>
@@ -489,6 +619,7 @@ function renderHelp(){
   <h2>Szybki wpis</h2><p>Przy pustym dniu roboczym jest zielony przycisk z Twoimi zwykłymi godzinami (np. 7:00–15:00). Dotknij go i wybierz miejsce. Nad każdym tygodniem jest przycisk, który wpisuje godziny na wszystkie puste dni tygodnia naraz. Zwykłe godziny zmienisz w Ustawieniach.</p>
   <h2>Odbiór nadgodzin</h2><p>Gdy wychodzisz wcześniej za nadgodziny, otwórz dzień i w części „Odbiór nadgodzin” ustaw, ile godzin odbierasz (np. 2:00). Na cały dzień wolny za nadgodziny usuń godziny pracy i naciśnij „Cały dzień”.</p>
   <h2>Urlop, L4, dzień wolny</h2><p>Na kilka dni naraz użyj przycisku <b>Urlop / L4 na kilka dni</b> nad listą. Na jeden dzień: dotknij dnia i wybierz np. <b>Urlop</b>, potem <b>Zapisz</b>. Urlop w dzień roboczy odejmuje 1 dzień z puli. Usunięcie urlopu oddaje ten dzień.</p>
+  <h2>Wniosek o urlop</h2><p>Po zaznaczeniu urlopu aplikacja zapyta, czy wystawić wniosek. Możesz w nim zmienić daty, miejscowość i datę wystawienia, a potem wysłać PDF na WhatsApp. Wniosek wystawisz też w Ustawieniach.</p>
   <h2>Nadgodziny</h2><ul><li>Od poniedziałku do piątku norma to 8 godzin. Więcej = nadgodziny, mniej = odejmuje się od nadgodzin.</li><li>Sobota, niedziela i święta – wszystkie godziny to nadgodziny.</li></ul>
   <h2>Święto w sobotę</h2><p>Dotknij tej soboty i wybierz, w którym dniu masz wolne za to święto.</p>
   <h2>Wysyłanie do kadr</h2><ol><li>Na dole naciśnij <b>Podgląd i wysyłka PDF</b> (miesiąc, który jest na ekranie). Sprawdź kartkę i naciśnij <b>Wyślij PDF</b>.</li><li>Wybierz <b>WhatsApp</b>.</li><li>Wybierz osobę z kadr i naciśnij wyślij.</li></ol>
@@ -526,20 +657,22 @@ const A={
   t:t=>{const e=V.draft.entries[+t.dataset.i];const k=t.dataset.k;e[k]=fromMin(Math.round((toMin(e[k])+(+t.dataset.n))/15)*15);render();},
   addEntry:()=>{const last=V.draft.entries[V.draft.entries.length-1];V.draft.entries.push(last?{start:last.end,end:fromMin(toMin(last.end)+120),place:''}:newEntry());render();},
   delEntry:async t=>{if(await ask('Usunąć to miejsce?','Wpis zostanie usunięty z tego dnia.','Tak, usuń','Nie',true)){V.draft.entries.splice(+t.dataset.i,1);render();}},
-  setPlace:t=>{const e=V.draft.entries[+t.dataset.i];e.place=togglePlace(e.place,S.places[+t.dataset.p]);render();},
+  setPlace:t=>{const e=V.draft.entries[+t.dataset.i];e.place=togglePlace(e.place,PL()[+t.dataset.p]);render();},
   clearPlace:t=>{V.draft.entries[+t.dataset.i].place='';render();},
   likeYesterday:async()=>{let s=V.day;for(let i=0;i<60;i++){s=addDays(s,-1);const d=S.days[s];if(d&&!d.mark&&d.entries&&d.entries.length){V.draft.entries=JSON.parse(JSON.stringify(d.entries));V.draft.mark=null;render();return;}}
     await msg('Brak wcześniejszego wpisu','Nie znalazłem wcześniejszego dnia z godzinami pracy.');},
   saveDay:async()=>{
     const s=V.day,dr=V.draft,old=S.days[s]||{};
     if(dr.mark)dr.entries=[];else dr.entries.forEach(e=>e.place=(e.place||'').trim());
-    if(dr.mark==='urlop'&&old.mark!=='urlop'&&isWorkdayNoMark(s)&&s>=S.vac.baseDate&&vacBalance()<=0){
+    const wasVac=isVacDay(s);const newUrlop=dr.mark==='urlop'&&(old.mark!=='urlop'||(old.utype||'wyp')!==(dr.utype||'wyp'));
+    if(dr.mark==='urlop'&&poolType(dr.utype)&&!wasVac&&isWorkdayNoMark(s)&&s>=S.vac.baseDate&&vacBalance()<=0){
       if(!await ask('Brak dni urlopu','Nie masz już dni urlopu do wykorzystania. Zapisać urlop mimo to?','Tak, zapisz','Nie'))return;}
     if(!dr.mark&&!dr.entries.length&&!dr.odbior)delete S.days[s];
-    else{const o={entries:dr.entries,mark:dr.mark||null};if(!dr.mark&&dr.odbior&&isWorkdayNoMark(s))o.odbior=dr.odbior;if(dr.mark==='wolneZaSwieto'&&dr.forHoliday)o.forHoliday=dr.forHoliday;S.days[s]=o;}
+    else{const o={entries:dr.entries,mark:dr.mark||null};if(!dr.mark&&dr.odbior&&isWorkdayNoMark(s))o.odbior=dr.odbior;if(dr.mark==='wolneZaSwieto'&&dr.forHoliday)o.forHoliday=dr.forHoliday;if(dr.mark==='urlop')o.utype=dr.utype||'wyp';S.days[s]=o;}
     for(const e of dr.entries)addPlaces(e.place);
     if(dr.entries.length)S.lastTimes={start:dr.entries[0].start,end:dr.entries[dr.entries.length-1].end};
-    await save();go('main');scrollTo(s);},
+    await save();go('main');scrollTo(s);
+    if(newUrlop)await offerWniosek(...urlopBlock(s),dr.utype||'wyp');},
   clearDay:async()=>{if(await ask('Usunąć wpis?','Wszystkie godziny i oznaczenia z tego dnia zostaną usunięte.','Tak, usuń','Nie',true)){delete S.days[V.day];await save();const s=V.day;go('main');scrollTo(s);}},
   compPick:()=>{V.compPick=true;render();},
   assignComp:async()=>{const v=($('#compDate')||{}).value;const hs=V.day;
@@ -565,16 +698,36 @@ const A={
     for(const s of days)S.days[s]={entries:[{start:S.std.start,end:S.std.end,place:pl}],mark:null};addPlaces(pl);await save();render();scrollTo(days[0]);},
   openRange:()=>{const t=todayStr();V.range={type:'urlop',from:t,to:t};go('range');},
   rgType:t=>{V.range.type=t.dataset.k;render();},
+  rgUtype:t=>{V.range.utype=t.dataset.k;render();},
+  setUtype:t=>{V.draft.utype=t.dataset.k;render();},
+  wnNew:()=>{const t=todayStr();V.wn={from:t,to:t,ut:'wyp',year:+t.slice(0,4),date:t};go('wniosek');},
+  wnUt:t=>{V.wn.ut=t.dataset.k;render();},
+  wnYear:t=>{V.wn.year+=(+t.dataset.n);render();},
+  wnSend:async()=>{const w=V.wn;if(w.to<w.from){await msg('Błędne daty','Data „do” nie może być wcześniejsza niż „od”.');return;}
+    const bytes=canvasToPdf(drawWniosek(w),'Wniosek o urlop '+w.from);
+    const file=new File([bytes],'Wniosek_urlop_'+safeName(S.name)+'_'+w.from+'.pdf',{type:'application/pdf'});
+    const r=await shareOrDownload(file);if(r==='downloaded')await msg('Wniosek zapisany','Plik jest w folderze „Pobrane”. Możesz go wysłać na WhatsApp jako dokument.');
+    if(r!=='aborted')go('main');},
+  payKind:async t=>{const k=t.dataset.k;const P=S.pay;if(P.kind!==k&&P.amount){P.amount=k==='brutto'?grossFromNet(P.amount):netFromGross(P.amount);}P.kind=k;await save();render();},
+  payTog:async t=>{const k=t.dataset.k;S.pay[k]=!S.pay[k];await save();render();},
+  payInfo:async()=>{const pc=payCalc(V.y,V.m);if(!pc)return;
+    const L=[`<b>${cap(MONTHS[V.m])} ${V.y}</b>`,`Godzin do przepracowania: ${pc.normH}`,`Stawka: ${zl(pc.rate)} brutto (ok. ${zl(pc.rateNet)} na rękę) za godzinę`,'',
+      `Nadgodziny +50% (dni robocze i soboty): ${fmtH(pc.g50)}`,`Nadgodziny +100% (niedziele i święta): ${fmtH(pc.g100)}`];
+    if(pc.g50+pc.g100!==pc.p50+pc.p100)L.push(`Po odjęciu niedoborów i odbioru: ${fmtH(pc.p50)} (+50%) i ${fmtH(pc.p100)} (+100%)`);
+    if(pc.missing)L.push(`<span class="neg">Brakuje ${fmtH(pc.missing)} godz. do normy</span>`);
+    L.push('',`Za nadgodziny: <b>${zl(pc.otG)} brutto</b>`,`Na rękę: <b>ok. ${zl(pc.otNet)}</b>`,`Razem z pensją na rękę: ok. ${zl(pc.netBase+pc.otNet)}`,'','<span class="small">Wyliczenie orientacyjne. Nie uwzględnia L4, urlopu bezpłatnego, premii ani pracy w nocy.</span>');
+    await msg('Zarobki za nadgodziny',L.join('<br>'));},
   rgSave:async()=>{const r=V.range;if(r.to<r.from){await msg('Błędne daty','Data „do” nie może być wcześniejsza niż „od”.');return;}
     let list=rangeDays(r);if(!list.length){await msg('Brak dni','W tym okresie nie ma dni do zaznaczenia.');return;}
     const conf=list.filter(s=>S.days[s]&&S.days[s].mark!==r.type);
     if(conf.length){const a=await dialog({title:'Niektóre dni mają wpisy',text:`${dni(conf.length)} z tego okresu ma już godziny lub inne oznaczenie. Co zrobić?`,buttons:[{l:'Zastąp je',v:2,cls:'danger'},{l:'Pomiń te dni',v:1},{l:'Anuluj',v:0,cls:'sec'}]});
       if(!a.v)return;if(a.v===1)list=list.filter(s=>!conf.includes(s));}
-    if(r.type==='urlop'){const n=list.filter(s=>s>=S.vac.baseDate&&!isVacDay(s)).length;
+    if(r.type==='urlop'&&poolType(r.utype)){const n=list.filter(s=>s>=S.vac.baseDate&&!isVacDay(s)).length;
       if(n&&vacBalance()-n<0&&!await ask('Za mało dni urlopu',`Po zapisaniu zostanie Ci ${dni(vacBalance()-n)} urlopu. Zapisać mimo to?`,'Tak, zapisz','Nie'))return;}
-    for(const s of list)S.days[s]={entries:[],mark:r.type};
+    for(const s of list)S.days[s]=r.type==='urlop'?{entries:[],mark:'urlop',utype:r.utype||'wyp'}:{entries:[],mark:r.type};
     await save();const d=parseYmd(list[0]);V.y=d.getFullYear();V.m=d.getMonth();go('main');scrollTo(list[0]);
-    await msg('Zapisano',`Zaznaczono ${dni(list.length)} jako ${MARKS[r.type]}.`);},
+    if(r.type==='urlop')await offerWniosek(list[0],list[list.length-1],r.utype||'wyp',dni(list.length)+' zaznaczono jako urlop.');
+    else await msg('Zapisano',`Zaznaczono ${dni(list.length)} jako ${MARKS[r.type]}.`);},
   install:async()=>{if(!installPrompt)return;installPrompt.prompt();try{await installPrompt.userChoice;}catch(e){}installPrompt=null;refreshBanners();},
   snoozeBackup:async()=>{const n=new Date();S.backupSnooze=ymKey(n.getFullYear(),n.getMonth());await save();refreshBanners();},
   backup:()=>exportBackup(),
@@ -587,7 +740,9 @@ const A={
     S.vac.history.push({date:todayStr(),text:'Zmieniono stan urlopu na '+dni(v)});V.vacEdit=null;await save();render();},
   annual:async t=>{S.vac.annual=Math.max(0,S.vac.annual+(+t.dataset.n));await save();render();},
   annualSet:async t=>{S.vac.annual=+t.dataset.n;await save();render();},
-  plAdd:async()=>{const r=await dialog({title:'Nowe miejsce pracy',input:'',buttons:[{l:'Dodaj',v:1,cls:'green'},{l:'Anuluj',v:0,cls:'sec'}]});const p=(r.input||'').trim();if(r.v&&p&&!S.places.includes(p)){S.places.push(p);await save();render();}},
+  plAdd:async()=>{const r=await dialog({title:'Nowe stałe miejsce',input:'',buttons:[{l:'Dodaj',v:1,cls:'green'},{l:'Anuluj',v:0,cls:'sec'}]});const p=(r.input||'').trim();if(r.v&&p&&!S.pinned.some(x=>x.toLowerCase()===p.toLowerCase())){S.pinned.push(p);await save();render();}},
+  plPin:async t=>{const p=t.dataset.p;if(!S.pinned.some(x=>x.toLowerCase()===p.toLowerCase()))S.pinned.push(p);await save();render();},
+  plUnpin:async t=>{const p=t.dataset.p;if(await ask('Odpiąć miejsce?',`„${esc(p)}” zniknie z listy, chyba że używasz go regularnie.`,'Tak, odepnij','Nie',true)){S.pinned=S.pinned.filter(x=>x!==p);await save();render();}},
   plRename:async t=>{const i=+t.dataset.i;const r=await dialog({title:'Zmień nazwę miejsca',input:S.places[i],buttons:[{l:'Zapisz',v:1,cls:'green'},{l:'Anuluj',v:0,cls:'sec'}]});const p=(r.input||'').trim();if(r.v&&p){S.places[i]=p;await save();render();}},
   plDel:async t=>{const i=+t.dataset.i;if(await ask('Usunąć miejsce z listy?',`„${esc(S.places[i])}” zniknie z listy podpowiedzi. Wpisane już godziny zostaną.`,'Tak, usuń','Nie',true)){S.places.splice(i,1);await save();render();}},
   gcal:()=>{const f=firstReminderDate();const d=f.replace(/-/g,'');const t=S.reminder.replace(':','')+'00';const t2=fromMin(toMin(S.reminder)+15).replace(':','')+'00';
@@ -612,6 +767,11 @@ document.addEventListener('change',e=>{const t=e.target;const f=t.dataset&&t.dat
   else if(f==='forHoliday'){V.draft.forHoliday=t.value||null;}
   else if(f==='rgFrom'&&t.value){V.range.from=t.value;if(V.range.to<t.value)V.range.to=t.value;render();}
   else if(f==='rgTo'&&t.value){V.range.to=t.value;render();}
+  else if(f==='payAmount'){S.pay.amount=Math.max(0,parseFloat(String(t.value).replace(',','.'))||0);save();render();}
+  else if(f==='wnFrom'&&t.value){V.wn.from=t.value;if(V.wn.to<t.value)V.wn.to=t.value;V.wn.year=+t.value.slice(0,4);render();}
+  else if(f==='wnTo'&&t.value){V.wn.to=t.value;render();}
+  else if(f==='wnDate'&&t.value){V.wn.date=t.value;render();}
+  else if(f==='wnCity'){S.city=t.value.trim();save();render();}
   else if(f==='reminder'&&t.value){S.reminder=t.value;save();}
   else if(f==='name'){S.name=t.value.trim();save();}});
 $('#importFile').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;
@@ -692,7 +852,7 @@ function drawSheet(y,m){
       if(i>0)[2,3,4].forEach(ci=>line(cx[ci],yy+i*lh,cx[ci+1],yy+i*lh,0.15,'#888'));});
     if(c.worked)txt(fmtH(c.worked),(cx[5]+cx[6])/2,midY,cols[5][1]-1,pt,true,'center');
     if(c.net)txt(fmtSigned(c.net),(cx[6]+cx[7])/2,midY,cols[6][1]-1,pt,true,'center');
-    let u='';if(c.mark==='wolneZaSwieto'&&dd.forHoliday)u='Wolne za św. '+fmtDate(dd.forHoliday).slice(0,5);else if(c.mark)u=MARKS[c.mark];else if(c.hol)u='Święto';else if(c.odb)u='Odbiór nadg. '+fmtH(c.odb);
+    let u='';if(c.mark==='wolneZaSwieto'&&dd.forHoliday)u='Wolne za św. '+fmtDate(dd.forHoliday).slice(0,5);else if(c.mark)u=markLabel(dd,true);else if(c.hol)u='Święto';else if(c.odb)u='Odbiór nadg. '+fmtH(c.odb);
     if(u)txt(u,(cx[7]+cx[8])/2,midY,cols[7][1]-1.5,pt*0.92,false,'center');
     yy+=rh;line(10,yy,200,yy,0.2);
   }
@@ -715,8 +875,9 @@ function drawSheet(y,m){
   return c;
 }
 function b64ToBytes(b64){const bin=atob(b64);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
-function buildPdf(y,m){
-  const c=drawSheet(y,m);const jpg=b64ToBytes(c.toDataURL('image/jpeg',0.92).split(',')[1]);
+function buildPdf(y,m){return canvasToPdf(drawSheet(y,m),'Ewidencja czasu pracy '+ymKey(y,m));}
+function canvasToPdf(c,title){
+  const jpg=b64ToBytes(c.toDataURL('image/jpeg',0.92).split(',')[1]);
   const enc=new TextEncoder();const parts=[];let len=0;const offs=[];
   const push=x=>{const b=typeof x==='string'?enc.encode(x):x;parts.push(b);len+=b.length;};
   const obj=(n,fn)=>{offs[n]=len;push(n+' 0 obj\n');fn();push('\nendobj\n');};
@@ -727,7 +888,7 @@ function buildPdf(y,m){
   const content='q\n595.28 0 0 841.89 0 0 cm\n/Im0 Do\nQ\n';
   obj(4,()=>push('<< /Length '+content.length+' >>\nstream\n'+content+'endstream'));
   obj(5,()=>{push('<< /Type /XObject /Subtype /Image /Width '+c.width+' /Height '+c.height+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+jpg.length+' >>\nstream\n');push(jpg);push('\nendstream');});
-  obj(6,()=>push('<< /Title (Ewidencja czasu pracy '+ymKey(y,m)+') /Producer (Ewidencja czasu pracy) >>'));
+  obj(6,()=>push('<< /Title ('+safeName(title).replace(/_/g,' ')+') /Producer (Ewidencja czasu pracy) >>'));
   const xref=len;let x='xref\n0 7\n0000000000 65535 f \n';for(let i=1;i<=6;i++)x+=String(offs[i]).padStart(10,'0')+' 00000 n \n';
   push(x+'trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n'+xref+'\n%%EOF\n');
   const out=new Uint8Array(len);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}return out;
